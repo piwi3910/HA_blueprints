@@ -72,12 +72,7 @@ blueprint:
           max: 60
           unit_of_measurement: seconds
           mode: slider
-    ignore_unavailable:
-      name: Ignore Unavailable Entities
-      description: Continue operation even when some entities are unavailable
-      default: true
-      selector:
-        boolean:
+
   source_url: https://github.com/piwi3910/HA_blueprints/blob/main/blueprints/universal-synchronized-switches.yaml
 
 mode: single
@@ -90,7 +85,7 @@ variables:
   transition_enabled: !input use_transition
   transition_duration: !input transition_time
   startup_wait: !input startup_delay
-  ignore_unavail: !input ignore_unavailable
+
   
   # Create a unique identifier for this automation instance to track state changes
   automation_id: "{{ this.entity_id }}"
@@ -146,19 +141,15 @@ action:
       entities_to_update: >
         {{ linked | reject('eq', trigger_entity) | list }}
       
-      # Filter out unavailable entities if ignore_unavailable is true
+      # Filter out unavailable entities
       available_entities: >
-        {% if ignore_unavail %}
-          {% set result = namespace(entities=[]) %}
-          {% for entity in entities_to_update %}
-            {% if states(entity) not in ['unavailable', 'unknown', 'none'] %}
-              {% set result.entities = result.entities + [entity] %}
-            {% endif %}
-          {% endfor %}
-          {{ result.entities }}
-        {% else %}
-          {{ entities_to_update }}
-        {% endif %}
+        {% set result = namespace(entities=[]) %}
+        {% for entity in entities_to_update %}
+          {% if states(entity) not in ['unavailable', 'unknown', 'none'] %}
+            {% set result.entities = result.entities + [entity] %}
+          {% endif %}
+        {% endfor %}
+        {{ result.entities }}
 
   # Only proceed if there are entities to update
   - condition: template
