@@ -1,0 +1,368 @@
+blueprint:
+  name: Scheduled Switch Control
+  description: |
+    Control a switch/light with flexible scheduling options including fixed times and solar events.
+    
+    Features:
+    - Fixed time scheduling (e.g., 08:00 for on, 22:00 for off)
+    - Solar event scheduling (sunrise, sunset, dawn, dusk)
+    - Offset options for solar events (e.g., 1 hour before sunset)
+    - Optional conditions (weekdays, presence, etc.)
+    - Works with any switch or light entity
+    - Single automation for both on and off times
+    - Optional random delay for more natural behavior
+    
+    Perfect for:
+    - Aquarium lights with fixed schedule
+    - Garden lights that follow sunset/sunrise
+    - Security lights with random variations
+    - Seasonal decorations
+    
+    Version: 1.0.0
+  domain: automation
+  input:
+    target_switch:
+      name: Switch/Light to Control
+      description: Select the switch or light entity to control
+      selector:
+        entity:
+          domain:
+            - switch
+            - light
+    
+    # ON TIME CONFIGURATION
+    on_time_type:
+      name: Turn On - Time Type
+      description: Choose how to determine the turn-on time
+      default: "fixed"
+      selector:
+        select:
+          options:
+            - label: "Fixed Time"
+              value: "fixed"
+            - label: "Sunrise"
+              value: "sunrise"
+            - label: "Sunset"
+              value: "sunset"
+            - label: "Dawn"
+              value: "dawn"
+            - label: "Dusk"
+              value: "dusk"
+    
+    on_fixed_time:
+      name: Turn On - Fixed Time
+      description: Time to turn on (only used if Fixed Time is selected)
+      default: "08:00:00"
+      selector:
+        time:
+    
+    on_offset:
+      name: Turn On - Offset
+      description: Offset in minutes for solar events (negative = before, positive = after)
+      default: 0
+      selector:
+        number:
+          min: -120
+          max: 120
+          unit_of_measurement: minutes
+          mode: slider
+    
+    # OFF TIME CONFIGURATION
+    off_time_type:
+      name: Turn Off - Time Type
+      description: Choose how to determine the turn-off time
+      default: "fixed"
+      selector:
+        select:
+          options:
+            - label: "Fixed Time"
+              value: "fixed"
+            - label: "Sunrise"
+              value: "sunrise"
+            - label: "Sunset"
+              value: "sunset"
+            - label: "Dawn"
+              value: "dawn"
+            - label: "Dusk"
+              value: "dusk"
+    
+    off_fixed_time:
+      name: Turn Off - Fixed Time
+      description: Time to turn off (only used if Fixed Time is selected)
+      default: "22:00:00"
+      selector:
+        time:
+    
+    off_offset:
+      name: Turn Off - Offset
+      description: Offset in minutes for solar events (negative = before, positive = after)
+      default: 0
+      selector:
+        number:
+          min: -120
+          max: 120
+          unit_of_measurement: minutes
+          mode: slider
+    
+    # OPTIONAL FEATURES
+    random_delay:
+      name: Random Delay
+      description: Add random delay (0-X minutes) to make schedule less predictable
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 30
+          unit_of_measurement: minutes
+          mode: slider
+    
+    enabled_weekdays:
+      name: Active Days
+      description: Days of the week when schedule is active
+      default:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: "Monday"
+              value: "mon"
+            - label: "Tuesday"
+              value: "tue"
+            - label: "Wednesday"
+              value: "wed"
+            - label: "Thursday"
+              value: "thu"
+            - label: "Friday"
+              value: "fri"
+            - label: "Saturday"
+              value: "sat"
+            - label: "Sunday"
+              value: "sun"
+    
+    additional_conditions:
+      name: Additional Conditions (Optional)
+      description: Extra conditions that must be met for schedule to run
+      default: []
+      selector:
+        condition:
+    
+    turn_on_actions:
+      name: Additional Turn On Actions (Optional)
+      description: Extra actions to perform when turning on (e.g., set brightness, send notification)
+      default: []
+      selector:
+        action:
+    
+    turn_off_actions:
+      name: Additional Turn Off Actions (Optional)
+      description: Extra actions to perform when turning off
+      default: []
+      selector:
+        action:
+        
+  source_url: https://github.com/piwi3910/HA_blueprints/blob/main/blueprints/scheduled-switch-control.yaml
+
+mode: single
+max_exceeded: silent
+
+variables:
+  switch_entity: !input target_switch
+  on_type: !input on_time_type
+  on_time: !input on_fixed_time
+  on_offset_minutes: !input on_offset
+  off_type: !input off_time_type
+  off_time: !input off_fixed_time
+  off_offset_minutes: !input off_offset
+  random_minutes: !input random_delay
+  active_days: !input enabled_weekdays
+  
+trigger:
+  # ON TRIGGERS
+  - platform: time
+    at: !input on_fixed_time
+    id: "on_fixed"
+    
+  - platform: sun
+    event: sunrise
+    offset: !input on_offset
+    id: "on_sunrise"
+    
+  - platform: sun
+    event: sunset
+    offset: !input on_offset
+    id: "on_sunset"
+    
+  # OFF TRIGGERS
+  - platform: time
+    at: !input off_fixed_time
+    id: "off_fixed"
+    
+  - platform: sun
+    event: sunrise
+    offset: !input off_offset
+    id: "off_sunrise"
+    
+  - platform: sun
+    event: sunset
+    offset: !input off_offset
+    id: "off_sunset"
+
+condition:
+  # Check if today is an active day
+  - condition: template
+    value_template: >
+      {% set today = now().strftime('%a').lower() %}
+      {{ today in active_days }}
+  
+  # Check if entity is available
+  - condition: template
+    value_template: >
+      {{ states(switch_entity) not in ['unavailable', 'unknown', 'none'] }}
+  
+  # Apply any additional conditions
+  - condition: !input additional_conditions
+
+action:
+  - choose:
+      # TURN ON ACTIONS
+      - conditions:
+          - condition: or
+            conditions:
+              # Fixed time on
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "on_fixed"
+                  - condition: template
+                    value_template: "{{ on_type == 'fixed' }}"
+              
+              # Sunrise on
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "on_sunrise"
+                  - condition: template
+                    value_template: "{{ on_type == 'sunrise' }}"
+              
+              # Sunset on
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "on_sunset"
+                  - condition: template
+                    value_template: "{{ on_type == 'sunset' }}"
+              
+              # Dawn on (using sunrise with -30 min offset internally)
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "on_sunrise"
+                  - condition: template
+                    value_template: "{{ on_type == 'dawn' }}"
+              
+              # Dusk on (using sunset with -30 min offset internally)
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "on_sunset"
+                  - condition: template
+                    value_template: "{{ on_type == 'dusk' }}"
+                    
+        sequence:
+          # Add random delay if configured
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ random_minutes > 0 }}"
+                sequence:
+                  - delay:
+                      minutes: "{{ range(0, random_minutes) | random }}"
+          
+          # Check if switch is already on
+          - condition: template
+            value_template: "{{ states(switch_entity) == 'off' }}"
+          
+          # Turn on the switch/light
+          - service: homeassistant.turn_on
+            target:
+              entity_id: !input target_switch
+          
+          # Execute additional turn on actions
+          - choose:
+              - conditions: []
+                sequence: !input turn_on_actions
+      
+      # TURN OFF ACTIONS
+      - conditions:
+          - condition: or
+            conditions:
+              # Fixed time off
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "off_fixed"
+                  - condition: template
+                    value_template: "{{ off_type == 'fixed' }}"
+              
+              # Sunrise off
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "off_sunrise"
+                  - condition: template
+                    value_template: "{{ off_type == 'sunrise' }}"
+              
+              # Sunset off
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "off_sunset"
+                  - condition: template
+                    value_template: "{{ off_type == 'sunset' }}"
+              
+              # Dawn off
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "off_sunrise"
+                  - condition: template
+                    value_template: "{{ off_type == 'dawn' }}"
+              
+              # Dusk off
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: "off_sunset"
+                  - condition: template
+                    value_template: "{{ off_type == 'dusk' }}"
+                    
+        sequence:
+          # Add random delay if configured
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ random_minutes > 0 }}"
+                sequence:
+                  - delay:
+                      minutes: "{{ range(0, random_minutes) | random }}"
+          
+          # Check if switch is already off
+          - condition: template
+            value_template: "{{ states(switch_entity) == 'on' }}"
+          
+          # Turn off the switch/light
+          - service: homeassistant.turn_off
+            target:
+              entity_id: !input target_switch
+          
+          # Execute additional turn off actions
+          - choose:
+              - conditions: []
+                sequence: !input turn_off_actions
