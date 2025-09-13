@@ -186,7 +186,7 @@ action:
                           data:
                             brightness: "{{ trigger_brightness }}"
                             transition: "{{ transition_duration }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
                     
                     # With brightness sync, no transition
                     - conditions:
@@ -198,7 +198,7 @@ action:
                             entity_id: "{{ repeat.item }}"
                           data:
                             brightness: "{{ trigger_brightness }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
                     
                     # With transition, no brightness sync
                     - conditions:
@@ -210,7 +210,7 @@ action:
                             entity_id: "{{ repeat.item }}"
                           data:
                             transition: "{{ transition_duration }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
                     
                     # Simple on, no brightness or transition
                     - conditions:
@@ -220,7 +220,7 @@ action:
                         - service: light.turn_on
                           target:
                             entity_id: "{{ repeat.item }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
             
             # If we're turning the entity off
             - conditions:
@@ -238,7 +238,7 @@ action:
                             entity_id: "{{ repeat.item }}"
                           data:
                             transition: "{{ transition_duration }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
                     
                     # Turn off without transition (for switches or when disabled)
                     - conditions:
@@ -248,7 +248,7 @@ action:
                         - service: homeassistant.turn_off
                           target:
                             entity_id: "{{ repeat.item }}"
-                          continue_on_error: "{{ ignore_unavail }}"
+                          continue_on_error: true
             
             # Default fallback for simple switches
             - conditions:
@@ -258,7 +258,7 @@ action:
                 - service: "homeassistant.turn_{{ trigger_state }}"
                   target:
                     entity_id: "{{ repeat.item }}"
-                  continue_on_error: "{{ ignore_unavail }}"
+                  continue_on_error: true
 
   # Small delay to prevent race conditions
   - delay:
