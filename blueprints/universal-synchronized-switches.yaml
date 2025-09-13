@@ -1,0 +1,265 @@
+blueprint:
+  name: Universal Synchronized Switches
+  description: |
+    Synchronize multiple switches/lights from ANY integration (Zigbee2MQTT, ZHA, Z-Wave, WiFi, Tasmota, ESPHome, etc.)
+    Create virtual multi-way switching without rewiring - perfect for hallways, stairs, and large rooms.
+    
+    Features:
+    - Works with ANY switch/light entity regardless of integration
+    - Mix different protocols: Zigbee + WiFi + Z-Wave in same group
+    - Multi-directional sync (any switch controls all others)
+    - Smart debouncing to prevent ping-pong effects
+    - Optional brightness synchronization for dimmable lights
+    - Optional transition delay for smooth switching
+    - Handles Home Assistant restarts gracefully
+    - Prevents errors when entities are unavailable during boot
+    
+    Version: 1.0.0
+  domain: automation
+  input:
+    linked_entities:
+      name: Linked Switches/Lights
+      description: |
+        Select all switches/lights you want to synchronize (minimum 2).
+        Can mix different integrations: Zigbee2MQTT, ZHA, Z-Wave, WiFi, Tasmota, ESPHome, etc.
+        All selected entities will mirror each other's state.
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - switch
+            - light
+    debounce_delay:
+      name: Debounce Delay
+      description: Time in milliseconds to wait before syncing to prevent ping-pong effects
+      default: 500
+      selector:
+        number:
+          min: 100
+          max: 2000
+          unit_of_measurement: ms
+          mode: slider
+    sync_brightness:
+      name: Sync Brightness
+      description: Synchronize brightness levels for dimmable lights (if supported)
+      default: false
+      selector:
+        boolean:
+    use_transition:
+      name: Use Transition
+      description: Enable smooth transitions when switching
+      default: false
+      selector:
+        boolean:
+    transition_time:
+      name: Transition Time
+      description: Transition duration in seconds (only if transition is enabled)
+      default: 1
+      selector:
+        number:
+          min: 0.5
+          max: 10
+          step: 0.5
+          unit_of_measurement: seconds
+          mode: slider
+    startup_delay:
+      name: Startup Delay
+      description: Wait time after Home Assistant starts before automation is active (prevents boot errors)
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: seconds
+          mode: slider
+    ignore_unavailable:
+      name: Ignore Unavailable Entities
+      description: Continue operation even when some entities are unavailable
+      default: true
+      selector:
+        boolean:
+  source_url: https://github.com/piwi3910/HA_blueprints/blob/main/blueprints/universal-synchronized-switches.yaml
+
+mode: single
+max_exceeded: silent
+
+variables:
+  linked: !input linked_entities
+  debounce_ms: !input debounce_delay
+  sync_brightness_enabled: !input sync_brightness
+  transition_enabled: !input use_transition
+  transition_duration: !input transition_time
+  startup_wait: !input startup_delay
+  ignore_unavail: !input ignore_unavailable
+  
+  # Create a unique identifier for this automation instance to track state changes
+  automation_id: "{{ this.entity_id }}"
+  
+trigger:
+  - platform: state
+    entity_id: !input linked_entities
+    from:
+      - "off"
+      - "on"
+    to:
+      - "off"
+      - "on"
+  - platform: state
+    entity_id: !input linked_entities
+    attribute: brightness
+    
+condition:
+  # Prevent triggering during Home Assistant startup period
+  - condition: template
+    value_template: >
+      {{ (now() - states.sensor.uptime.last_changed if states.sensor.uptime is defined 
+         else now() - timedelta(seconds=startup_wait)).total_seconds() > startup_wait }}
+    
+  # Check if the triggering entity is available
+  - condition: template
+    value_template: >
+      {{ trigger.to_state.state not in ['unavailable', 'unknown', 'none'] }}
+      
+  # Debounce check - prevent rapid successive triggers
+  - condition: template
+    value_template: >
+      {% set last_triggered = state_attr(automation_id, 'last_triggered') %}
+      {% if last_triggered %}
+        {{ (now() - last_triggered).total_seconds() * 1000 > debounce_ms }}
+      {% else %}
+        true
+      {% endif %}
+
+action:
+  # Store the triggering entity and its new state
+  - variables:
+      trigger_entity: "{{ trigger.entity_id }}"
+      trigger_state: "{{ trigger.to_state.state }}"
+      trigger_brightness: >
+        {% if sync_brightness_enabled and trigger.to_state.attributes.brightness is defined %}
+          {{ trigger.to_state.attributes.brightness }}
+        {% else %}
+          none
+        {% endif %}
+      
+      # Get list of entities to update (all except the trigger)
+      entities_to_update: >
+        {{ linked | reject('eq', trigger_entity) | list }}
+      
+      # Filter out unavailable entities if ignore_unavailable is true
+      available_entities: >
+        {% if ignore_unavail %}
+          {% set result = namespace(entities=[]) %}
+          {% for entity in entities_to_update %}
+            {% if states(entity) not in ['unavailable', 'unknown', 'none'] %}
+              {% set result.entities = result.entities + [entity] %}
+            {% endif %}
+          {% endfor %}
+          {{ result.entities }}
+        {% else %}
+          {{ entities_to_update }}
+        {% endif %}
+
+  # Only proceed if there are entities to update
+  - condition: template
+    value_template: "{{ available_entities | length > 0 }}"
+
+  # Update all other linked entities
+  - repeat:
+      for_each: "{{ available_entities }}"
+      sequence:
+        - choose:
+            # If entity is a light and we're turning it on
+            - conditions:
+                - condition: template
+                  value_template: "{{ trigger_state == 'on' and state_attr(repeat.item, 'supported_features') is not none }}"
+              sequence:
+                - choose:
+                    # With brightness sync and transition
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ sync_brightness_enabled and trigger_brightness != 'none' and transition_enabled }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            brightness: "{{ trigger_brightness }}"
+                            transition: "{{ transition_duration }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+                    
+                    # With brightness sync, no transition
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ sync_brightness_enabled and trigger_brightness != 'none' and not transition_enabled }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            brightness: "{{ trigger_brightness }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+                    
+                    # With transition, no brightness sync
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ not sync_brightness_enabled and transition_enabled }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            transition: "{{ transition_duration }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+                    
+                    # Simple on, no brightness or transition
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ not sync_brightness_enabled and not transition_enabled }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+            
+            # If we're turning the entity off
+            - conditions:
+                - condition: template
+                  value_template: "{{ trigger_state == 'off' }}"
+              sequence:
+                - choose:
+                    # Turn off with transition (for lights)
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ transition_enabled and state_attr(repeat.item, 'supported_features') is not none }}"
+                      sequence:
+                        - service: light.turn_off
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            transition: "{{ transition_duration }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+                    
+                    # Turn off without transition (for switches or when disabled)
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ true }}"
+                      sequence:
+                        - service: homeassistant.turn_off
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          continue_on_error: "{{ ignore_unavail }}"
+            
+            # Default fallback for simple switches
+            - conditions:
+                - condition: template
+                  value_template: "{{ true }}"
+              sequence:
+                - service: "homeassistant.turn_{{ trigger_state }}"
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  continue_on_error: "{{ ignore_unavail }}"
+
+  # Small delay to prevent race conditions
+  - delay:
+      milliseconds: 50
