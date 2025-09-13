@@ -93,45 +93,37 @@ variables:
 trigger:
   - platform: state
     entity_id: !input linked_entities
-    from:
-      - "off"
-      - "on"
     to:
       - "off"
       - "on"
-  - platform: state
-    entity_id: !input linked_entities
-    attribute: brightness
     
 condition:
-  # Prevent triggering during Home Assistant startup period
-  - condition: template
-    value_template: >
-      {{ (now() - states.sensor.uptime.last_changed if states.sensor.uptime is defined 
-         else now() - timedelta(seconds=startup_wait)).total_seconds() > startup_wait }}
-    
   # Check if the triggering entity is available
   - condition: template
     value_template: >
       {{ trigger.to_state.state not in ['unavailable', 'unknown', 'none'] }}
-      
-  # Debounce check - prevent rapid successive triggers
+  
+  # Check if we're past the startup period (if Home Assistant recently started)
   - condition: template
     value_template: >
-      {% set last_triggered = state_attr(automation_id, 'last_triggered') %}
-      {% if last_triggered %}
-        {{ (now() - last_triggered).total_seconds() * 1000 > debounce_ms }}
+      {% set uptime = states('sensor.uptime') %}
+      {% if uptime not in ['unavailable', 'unknown', 'none'] %}
+        {{ as_timestamp(now()) - as_timestamp(states.sensor.uptime.last_changed) > startup_wait }}
       {% else %}
         true
       {% endif %}
 
 action:
+  # Add debounce delay to prevent ping-pong effects
+  - delay:
+      milliseconds: "{{ debounce_ms }}"
+  
   # Store the triggering entity and its new state
   - variables:
       trigger_entity: "{{ trigger.entity_id }}"
       trigger_state: "{{ trigger.to_state.state }}"
       trigger_brightness: >
-        {% if sync_brightness_enabled and trigger.to_state.attributes.brightness is defined %}
+        {% if sync_brightness_enabled and trigger_state == 'on' and trigger.to_state.attributes.brightness is defined %}
           {{ trigger.to_state.attributes.brightness }}
         {% else %}
           none
@@ -251,6 +243,3 @@ action:
                     entity_id: "{{ repeat.item }}"
                   continue_on_error: true
 
-  # Small delay to prevent race conditions
-  - delay:
-      milliseconds: 50
